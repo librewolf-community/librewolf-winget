@@ -1,0 +1,62 @@
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version number
+        required: true
+      file:
+        description: File URL
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Download file
+        run: wget -q "${{ github.event.inputs.file }}" -O "setup.exe"
+      - name: Calculate checksum
+        id: checksum
+        run: echo "::set-output name=checksum::$(sha256sum < setup.exe | head -c 64)"
+      - name: Insert data
+        run: |
+          sed -i "s;{{version}};${{github.event.inputs.version}};g" *.yaml
+          sed -i "s;{{file}};${{github.event.inputs.file}};g" *.yaml
+          sed -i "s;{{checksum}};${{steps.checksum.outputs.checksum}};g" *.yaml
+      - name: Clone maltejur/winget-pkgs and pull upstream
+        run: |
+          git clone https://github.com/maltejur/winget-pkgs.git
+          cd winget-pkgs
+          git remote add upstream https://github.com/microsoft/winget-pkgs.git
+          git pull upstream master
+          git switch -C update_librewolf
+          git reset --hard upstream/master
+      - name: Create new version
+        run: |
+          mkdir winget-pkgs/manifests/l/LibreWolf/LibreWolf/${{github.event.inputs.version}}
+          cp *.yaml winget-pkgs/manifests/l/LibreWolf/LibreWolf/${{github.event.inputs.version}}
+      - name: Commit changes
+        run: |
+          cd winget-pkgs
+          git add .
+          git config user.name "github-actions"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update LibreWolf.LibreWolf to v${{github.event.inputs.version}}"
+      - name: Push changes to maltejur/winget-pkgs
+        run: |
+          cd winget-pkgs
+          git remote set-url --push origin https://maltejur:$GH_TOKEN@github.com/maltejur/winget-pkgs.git
+          git push origin update_librewolf --force
+      - name: Create pull request
+        run: |
+          curl -u maltejur:$GH_TOKEN -H "Accept: application/vnd.github.v3+json" https://api.github.com/repos/microsoft/winget-pkgs/pulls -d "{\"head\":\"maltejur:update_librewolf\",\"base\":\"master\",\"title\":\"Update LibreWolf.LibreWolf to v${{github.event.inputs.version}}\",\"body\":\"- [X] Have you signed the [Contributor License Agreement](https://cla.opensource.microsoft.com/microsoft/winget-pkgs)?\n- [X] Have you checked that there aren't other open [pull requests](https://github.com/microsoft/winget-pkgs/pulls) for the same manifest update/change?\n- [X] Have you [validated](https://github.com/denelon/winget-pkgs/blob/master/AUTHORING_MANIFESTS.md#validation) your manifest locally with <code>winget validate --manifest &lt;path></code>? \n- [X] Have you tested your manifest locally with <code>winget install --manifest &lt;path></code>?\n- [X] Does your manifest conform to the [1.0 schema](https://github.com/microsoft/winget-cli/blob/master/doc/ManifestSpecv1.0.md)?\n\nNote: <code>&lt;path></code> is the name of the directory containing the manifest you're submitting.\n\n-----\n\"}"
+      - name: Create release
+        uses: "marvinpinto/action-automatic-releases@latest"
+        with:
+          repo_token: "${{ secrets.GH_TOKEN }}"
+          automatic_release_tag: "${{ github.event.inputs.version }}"
+          prerelease: false
+          title: ${{github.event.inputs.version}}
